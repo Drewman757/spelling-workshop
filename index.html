@@ -220,14 +220,14 @@ var SPK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width
 function uid(p){return p+Date.now().toString(36)+Math.floor(Math.random()*1296).toString(36)}
 function today(){var d=new Date();return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2)}
 function okList(l){return !!(l&&Array.isArray(l.words)&&l.words.length)}
-function mkLesson(name,words,date){return {id:uid('l'),date:date||today(),name:name,words:words}}
+function mkLesson(name,words,date,num){return {id:uid('l'),date:date||today(),name:name,num:num>0?Math.floor(num):null,words:words}}
 function mkKid(name){return {id:uid('k'),name:name,lessons:[],stats:{},view:{mode:'current'}}}
 function cleanWords(ws){return (ws||[]).filter(function(x){return x&&x.w}).map(function(x){var o={w:String(x.w),s:x.s?String(x.s):''};if(x.h)o.h=true;return o})}
 /* turns a saved file from any version into {kids,kid,voices,active} */
 function migrate(raw){
  if(raw&&Array.isArray(raw.kids)&&raw.kids.length){
   raw.kids.forEach(function(k){k.id=k.id||uid('k');k.name=k.name||'Kid';k.stats=k.stats||{};k.view=k.view||{mode:'current'};
-   k.lessons=(Array.isArray(k.lessons)?k.lessons:[]).map(function(l){return{id:l.id||uid('l'),date:l.date||today(),name:l.name||'Lesson',words:cleanWords(l.words)}}).filter(function(l){return l.words.length})});
+   k.lessons=(Array.isArray(k.lessons)?k.lessons:[]).map(function(l){return{id:l.id||uid('l'),date:l.date||today(),name:l.name||'Lesson',num:(l.num>0?Math.floor(l.num):null),words:cleanWords(l.words)}}).filter(function(l){return l.words.length})});
   return{kids:raw.kids,kid:raw.kid,voices:Array.isArray(raw.voices)?raw.voices:[],active:raw.active||'computer',variants:(raw.variants&&typeof raw.variants==='object')?raw.variants:{}}}
  var o=mkKid('Oliver'),f=mkKid('Freddie');
  var ls=raw&&Array.isArray(raw.lists)?raw.lists.filter(okList):(raw&&okList(raw.list)?[raw.list]:[]);
@@ -242,7 +242,12 @@ var store={kids:[],kid:null,voices:[],active:'computer',variants:{}};
 if(!store.kids.some(function(k){return k.id===store.kid}))store.kid=store.kids[0].id;
 if(store.active!=='computer'&&!store.voices.some(function(v){return v.id===store.active}))store.active='computer';
 function curKid(){return store.kids.find(function(k){return k.id===store.kid})||store.kids[0]}
-function curLesson(k){var best=null;k.lessons.forEach(function(l){if(!best||l.date>=best.date)best=l});return best}
+/* lessons are ordered by date, then lesson number, then the order they were added */
+function lessonCmp(k){var ix={};k.lessons.forEach(function(l,i){ix[l.id]=i});return function(a,b){if(a.date!==b.date)return a.date<b.date?-1:1;var na=a.num||0,nb=b.num||0;if(na!==nb)return na-nb;return ix[a.id]-ix[b.id]}}
+function sortedLessons(k){return k.lessons.slice().sort(lessonCmp(k))}
+function lessonLabel(l){var n=(l.name||'').trim();if(l.num)return 'Lesson '+l.num+(n?' \u00b7 '+n:'');return n||('Lesson of '+fmtDate(l.date))}
+function nextNum(k){var m=0;k.lessons.forEach(function(l){if(l.num>m)m=l.num});return m+1}
+function curLesson(k){var a=sortedLessons(k);return a.length?a[a.length-1]:null}
 function visWords(l){return l.words.filter(function(x){return !x.h})}
 function allWords(k){var seen={},out=[];k.lessons.forEach(function(l){visWords(l).forEach(function(x){
   if(!seen[x.w]){seen[x.w]={w:x.w,s:x.s||''};out.push(seen[x.w])}else if(x.s&&!seen[x.w].s)seen[x.w].s=x.s})});return out}
@@ -252,8 +257,8 @@ function activeList(){var k=curKid(),v=k.view||{mode:'current'};
  if(!k.lessons.length)return{name:'No words yet',words:[],mode:'none',lesson:null};
  if(v.mode==='all')return{name:'All lessons',words:allWords(k),mode:'all',lesson:null};
  var cl=curLesson(k),l=v.mode==='lesson'?k.lessons.find(function(x){return x.id===v.lid}):null;
- if(!l||l.id===cl.id)return{name:cl.name,words:visWords(cl),mode:'current',lesson:cl};
- return{name:l.name,words:visWords(l),mode:'lesson',lesson:l}}
+ if(!l||l.id===cl.id)return{name:lessonLabel(cl),words:visWords(cl),mode:'current',lesson:cl};
+ return{name:lessonLabel(l),words:visWords(l),mode:'lesson',lesson:l}}
 Object.defineProperty(store,'list',{get:activeList,enumerable:false});
 Object.defineProperty(store,'stats',{get:function(){var k=curKid();return k.stats||(k.stats={})},set:function(v){curKid().stats=v},enumerable:false});
 function persisted(){return{v:2,kids:store.kids,kid:store.kid,voices:store.voices,active:store.active,variants:store.variants}}
@@ -351,11 +356,11 @@ function kidTabs(){
 function viewRow(){
  var k=curKid();if(k.lessons.length<2)return '';var cl=curLesson(k),v=k.view||{mode:'current'};
  var val=v.mode==='all'?'all':(v.mode==='lesson'&&v.lid!==cl.id&&k.lessons.some(function(l){return l.id===v.lid})?'L:'+v.lid:'current');
- var past=k.lessons.filter(function(l){return l!==cl}).sort(function(a,b){return a.date<b.date?1:a.date>b.date?-1:0});
+ var past=sortedLessons(k).filter(function(l){return l!==cl});
  function opt(v2,t){return '<option value="'+esc(v2)+'"'+(val===v2?' selected':'')+'>'+esc(t)+'</option>'}
  return '<section aria-label="Lesson"><label for="viewsel" class="eyebrow" style="margin:0 0 6px">Practice</label><select id="viewsel" class="field">'+
-  opt('current','Current lesson: '+cl.name+' ('+fmtDate(cl.date)+')')+opt('all','All lessons combined ('+allWords(k).length+' words)')+
-  (past.length?'<optgroup label="Past lessons">'+past.map(function(l){return opt('L:'+l.id,fmtDate(l.date)+' · '+l.name+' ('+visWords(l).length+')')}).join('')+'</optgroup>':'')+'</select></section>'}
+  opt('current','Current: '+lessonLabel(cl)+(cl.num?'':' ('+fmtDate(cl.date)+')'))+opt('all','All lessons combined ('+allWords(k).length+' words)')+
+  (past.length?'<optgroup label="Other lessons">'+past.map(function(l){return opt('L:'+l.id,lessonLabel(l)+(l.num?'':' · '+fmtDate(l.date))+' ('+visWords(l).length+')')}).join('')+'</optgroup>':'')+'</select></section>'}
 function listRow(){return viewRow()}
 function voiceRow(){
  if(!store.voices.length)return '';
@@ -508,10 +513,11 @@ function lessonById(id){return curKid().lessons.find(function(l){return l.id===i
 function wordsText(ws){return ws.filter(function(x){return !x.h}).map(function(x){return x.s?x.w+' | '+x.s:x.w}).join('\n')}
 function editHTML(){
  var k=curKid(),L=edit.isNew?null:lessonById(edit.lid);
- var draft=edit.draft!=null?edit.draft:(L?wordsText(L.words):''),name=edit.name!=null?edit.name:(L?L.name:''),date=edit.date!=null?edit.date:(L?L.date:today());
+ var draft=edit.draft!=null?edit.draft:(L?wordsText(L.words):''),name=edit.name!=null?edit.name:(L?L.name:''),num=edit.num!=null?edit.num:(L&&L.num?L.num:''),date=edit.date!=null?edit.date:(L?L.date:today());
  var hidden=L?L.words.filter(function(x){return x.h}):[];
  return '<header><div class="eyebrow">'+esc(k.name)+'</div><h1>'+(L?'Edit lesson':'New lesson')+'</h1></header>'+
-  '<label for="ln">Lesson name</label><input id="ln" class="field" type="text" value="'+esc(name)+'" maxlength="40" placeholder="Week of Oct 27">'+
+  '<label for="lnum">Lesson number</label><input id="lnum" class="field" type="number" inputmode="numeric" min="1" max="999" value="'+esc(String(num))+'" placeholder="1">'+
+  '<label for="ln">Title (optional)</label><input id="ln" class="field" type="text" value="'+esc(name)+'" maxlength="40" placeholder="Short vowels">'+
   '<label for="ld">Date</label><input id="ld" class="field" type="date" value="'+esc(date)+'">'+
   '<label for="wl">Words</label><textarea id="wl" spellcheck="false" autocapitalize="off">'+esc(draft)+'</textarea>'+
   '<p class="hint">One word per line, or paste a row of words. To add a sentence, write the word, then | then the sentence.'+(L?' Words you take off this list are hidden, not deleted.':'')+'</p>'+
@@ -703,7 +709,7 @@ function ocrWords(data){var ws=data.words;if(!ws||!ws.length){ws=[];(data.blocks
  if(!items.length)return extractWords(data.text);
  hs.sort(function(a,b){return a-b});var med=hs[Math.floor(hs.length/2)];
  return extractWords(items.filter(function(it){return it.h>=med*0.5}).map(function(it){return it.t}).join(' '))}
-function captureEdit(){var t=document.getElementById('wl'),n=document.getElementById('ln'),d=document.getElementById('ld');if(t)edit.draft=t.value;if(n)edit.name=n.value;if(d&&d.value)edit.date=d.value}
+function captureEdit(){var t=document.getElementById('wl'),n=document.getElementById('ln'),d=document.getElementById('ld'),nm=document.getElementById('lnum');if(nm)edit.num=nm.value;if(t)edit.draft=t.value;if(n)edit.name=n.value;if(d&&d.value)edit.date=d.value}
 function runOcr(file){captureEdit();ocrBusy=true;ocrMsg='Reading the picture. The first time takes a little while.';render();
  prepImage(file).then(function(c){return(window.Tesseract?Promise.resolve():loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js')).then(function(){return Tesseract.createWorker('eng',1,{langPath:'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int'})}).then(function(wk){return wk.setParameters({tessedit_pageseg_mode:'6'}).then(function(){return wk.recognize(c)}).then(function(r){try{wk.terminate()}catch(e){}return r},function(e){try{wk.terminate()}catch(x){}throw e})})})
  .then(function(r){var words=ocrWords(r.data);ocrBusy=false;
@@ -745,7 +751,7 @@ var H={
   if(store.kids.some(function(k){return k.name.toLowerCase()===n.toLowerCase()})){el2.value='';el2.placeholder='That name is already a tab';return}
   var k=mkKid(n.slice(0,20));store.kids.push(k);store.kid=k.id;ui.addKid=false;save();render()},
  ocr:function(){captureEdit();fileImg.click()},
- newlesson:function(){view='edit';edit={err:'',confirm:false,draft:'',name:'',date:today(),isNew:true};ocrMsg='';render()},
+ newlesson:function(){view='edit';edit={err:'',confirm:false,draft:'',name:'',num:nextNum(curKid()),date:today(),isNew:true};ocrMsg='';render()},
  unhide:function(b){captureEdit();var L=lessonById(edit.lid);if(!L)return;var x=L.words.find(function(y){return y.w===b.dataset.w});if(!x)return;
   x.h=false;delete x.h;edit.draft=(edit.draft||'').replace(/\s+$/,'')+(edit.draft&&edit.draft.trim()?'\n':'')+(x.s?x.w+' | '+x.s:x.w);save();render()},
 
@@ -785,14 +791,14 @@ var H={
  edit:function(){var l=store.list.lesson;if(!l)return;view='edit';edit={err:'',confirm:false,isNew:false,lid:l.id};ocrMsg='';render()},
  saveList:function(){captureEdit();var words=parseList(edit.draft||'');
   if(!words.length){edit.err='Add at least one word.';render();return}
-  var k=curKid(),date=/^\d{4}-\d{2}-\d{2}$/.test(edit.date||'')?edit.date:today(),name=(edit.name||'').trim()||('Lesson of '+fmtDate(date));
-  if(edit.isNew){var nl=mkLesson(name,words,date);k.lessons.push(nl);k.view=(curLesson(k)===nl)?{mode:'current'}:{mode:'lesson',lid:nl.id}}
+  var k=curKid(),date=/^\d{4}-\d{2}-\d{2}$/.test(edit.date||'')?edit.date:today(),num=parseInt(edit.num,10);num=num>0?Math.min(num,999):null;var name=(edit.name||'').trim();if(!name&&!num)name='Lesson of '+fmtDate(date);
+  if(edit.isNew){var nl=mkLesson(name,words,date,num);k.lessons.push(nl);k.view=(curLesson(k)===nl)?{mode:'current'}:{mode:'lesson',lid:nl.id}}
   else{var L=lessonById(edit.lid);if(L){var map={};words.forEach(function(x){map[x.w]=x});
     var kept=L.words.map(function(o){var m=map[o.w];if(m){var r={w:o.w,s:m.s||''};return r}var r2={w:o.w,s:o.s||'',h:true};return r2});
     words.forEach(function(x){if(!L.words.some(function(o){return o.w===x.w}))kept.push({w:x.w,s:x.s||''})});
     var order={};words.forEach(function(x,i){order[x.w]=i});
     kept.sort(function(a,b){var ha=a.h?1:0,hb=b.h?1:0;if(ha!==hb)return ha-hb;return ha?0:order[a.w]-order[b.w]});
-    L.words=kept;L.name=name;L.date=date}}
+    L.words=kept;L.name=name;L.num=num;L.date=date}}
   save();edit={err:'',confirm:false};ocrMsg='';view='home';render()},
  resetProg:function(){captureEdit();if(!edit.confirm){edit.confirm=true;render();return}
   store.stats={};save();edit={err:'',confirm:false};view='home';render()}
