@@ -670,17 +670,43 @@ function importFile(file){if(!file)return;var r=new FileReader();r.onload=functi
 var ocrBusy=false,ocrMsg='';
 function loadScript(u){return new Promise(function(res,rej){var s=document.createElement('script');s.src=u;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
 function prepImage(file){return new Promise(function(res,rej){var img=new Image(),u=URL.createObjectURL(file);
- img.onload=function(){URL.revokeObjectURL(u);var sc=Math.min(1,2200/Math.max(img.width,img.height)),c=document.createElement('canvas');c.width=Math.max(1,Math.round(img.width*sc));c.height=Math.max(1,Math.round(img.height*sc));
-  var x=c.getContext('2d');x.drawImage(img,0,0,c.width,c.height);var id=x.getImageData(0,0,c.width,c.height),d=id.data,hist=new Uint32Array(256),n=c.width*c.height,q;
-  for(q=0;q<d.length;q+=4){var g=Math.min(d[q],d[q+1],d[q+2]);d[q]=g;hist[g]++}
-  var lo=0,hi=255,acc=0;while(lo<255&&acc+hist[lo]<n*0.01){acc+=hist[lo];lo++}acc=0;while(hi>0&&acc+hist[hi]<n*0.01){acc+=hist[hi];hi--}
-  var span=Math.max(1,hi-lo);for(q=0;q<d.length;q+=4){var v=Math.max(0,Math.min(255,(d[q]-lo)*255/span));d[q]=d[q+1]=d[q+2]=v;d[q+3]=255}
+ img.onload=function(){URL.revokeObjectURL(u);var sc=Math.min(1,2200/Math.max(img.width,img.height)),W=Math.max(1,Math.round(img.width*sc)),H=Math.max(1,Math.round(img.height*sc)),c=document.createElement('canvas');c.width=W;c.height=H;
+  var x=c.getContext('2d');x.drawImage(img,0,0,W,H);var id=x.getImageData(0,0,W,H),d=id.data,g=new Uint8Array(W*H),q,i,j,k;
+  for(q=0,k=0;q<d.length;q+=4,k++)g[k]=Math.min(d[q],d[q+1],d[q+2]);
+  /* estimate the paper brightness block by block (90th percentile), so shadows, folders and the table do not matter */
+  var B=48,bw=Math.ceil(W/B),bh=Math.ceil(H/B),sm=document.createElement('canvas');sm.width=bw;sm.height=bh;var sx=sm.getContext('2d'),sd=sx.createImageData(bw,bh);
+  for(i=0;i<bh;i++)for(j=0;j<bw;j++){var hist=new Uint32Array(256),cnt=0,yy,xx;
+   for(yy=i*B;yy<Math.min(H,(i+1)*B);yy++)for(xx=j*B;xx<Math.min(W,(j+1)*B);xx++){hist[g[yy*W+xx]]++;cnt++}
+   var t=cnt*0.9,a2=0,v=0;while(v<255&&a2+hist[v]<t){a2+=hist[v];v++}
+   var o=(i*bw+j)*4;sd.data[o]=sd.data[o+1]=sd.data[o+2]=v;sd.data[o+3]=255}
+  sx.putImageData(sd,0,0);var bc=document.createElement('canvas');bc.width=W;bc.height=H;var bx=bc.getContext('2d');bx.imageSmoothingEnabled=true;bx.drawImage(sm,0,0,W,H);
+  var bd=bx.getImageData(0,0,W,H).data;
+  /* keep only dark ink: faint see-through print from the back of the page and background texture turn white */
+  for(q=0,k=0;q<d.length;q+=4,k++){var r=g[k]/Math.max(1,bd[q])*255;r=r>255?255:r;if(r>=150)r=255;d[q]=d[q+1]=d[q+2]=r;d[q+3]=255}
+  cleanInk(d,W,H);
   x.putImageData(id,0,0);res(c)};img.onerror=function(){rej(new Error('image'))};img.src=u})}
-function extractWords(text){var seen={},out=[];(String(text).match(/[A-Za-z]+/g)||[]).forEach(function(t){var w=t.toLowerCase();if(w.length>=2&&w.length<=14&&!seen[w]){seen[w]=1;out.push(w)}});return out}
+/* erase everything that is not letter-sized ink: page edges, shadows, scratches, specks */
+function cleanInk(d,W,H){var N=W*H,lab=new Int32Array(N),st=[],stack=new Int32Array(N),n=0,p,k,sp,nb,xx,yy;
+ for(p=0;p<N;p++){if(lab[p]||d[p*4]>=255)continue;n++;var x0=W,x1=0,y0=H,y1=0,ar=0,sm2=0;sp=0;stack[sp++]=p;lab[p]=n;
+  while(sp){k=stack[--sp];ar++;sm2+=d[k*4];xx=k%W;yy=(k-xx)/W;if(xx<x0)x0=xx;if(xx>x1)x1=xx;if(yy<y0)y0=yy;if(yy>y1)y1=yy;
+   for(var dy=-1;dy<=1;dy++)for(var dx=-1;dx<=1;dx++){var X=xx+dx,Y=yy+dy;if(X<0||Y<0||X>=W||Y>=H)continue;nb=Y*W+X;if(!lab[nb]&&d[nb*4]<255){lab[nb]=n;stack[sp++]=nb}}}
+  st[n]={x0:x0,x1:x1,y0:y0,y1:y1,a:ar,m:sm2/ar,keep:false}}
+ var hs=[],i,c;for(i=1;i<=n;i++){c=st[i];c.h=c.y1-c.y0+1;c.w=c.x1-c.x0+1;c.edge=c.x0<=1||c.y0<=1||c.x1>=W-2||c.y1>=H-2;c.big=c.a>=120&&c.m<110&&!c.edge&&c.h<0.25*H&&c.w<0.5*W&&c.a/(c.w*c.h)>=0.2;if(c.big)hs.push(c.h)}
+ if(!hs.length)return;hs.sort(function(a,b){return a-b});var M=hs[Math.floor(hs.length/2)];
+ var big=[];for(i=1;i<=n;i++){c=st[i];if(c.big&&c.h>=M*0.5&&c.h<=M*2){c.keep=true;big.push(c)}}
+ for(i=1;i<=n;i++){c=st[i];if(c.keep||c.edge||c.a<6||c.m>=110)continue;for(var j=0;j<big.length;j++){var b=big[j];if(c.x1>=b.x0-4&&c.x0<=b.x1+4&&c.y1>=b.y0-M&&c.y0<=b.y1+M&&c.h<M*0.6){c.keep=true;break}}}
+ for(p=0;p<N;p++){if(lab[p]&&!st[lab[p]].keep){d[p*4]=d[p*4+1]=d[p*4+2]=255}}}
+function extractWords(text){var seen={},out=[];(String(text).match(/[A-Za-z]+/g)||[]).forEach(function(t){var w=t.toLowerCase();if((w.length>=2||w==='a'||w==='i')&&w.length<=14&&!seen[w]){seen[w]=1;out.push(w)}});return out}
+/* drop tiny specks and stray marks: real list words are about the same height as each other */
+function ocrWords(data){var ws=data.words;if(!ws||!ws.length){ws=[];(data.blocks||[]).forEach(function(b){(b.paragraphs||[]).forEach(function(p){(p.lines||[]).forEach(function(l){(l.words||[]).forEach(function(w){ws.push(w)})})})})}
+ var hs=[],items=[];ws.forEach(function(w){var t=(w.text||'').replace(/[^A-Za-z]/g,''),b=w.bbox;if(!t||!b)return;var h=b.y1-b.y0;items.push({t:t,h:h});hs.push(h)});
+ if(!items.length)return extractWords(data.text);
+ hs.sort(function(a,b){return a-b});var med=hs[Math.floor(hs.length/2)];
+ return extractWords(items.filter(function(it){return it.h>=med*0.5}).map(function(it){return it.t}).join(' '))}
 function captureEdit(){var t=document.getElementById('wl'),n=document.getElementById('ln'),d=document.getElementById('ld');if(t)edit.draft=t.value;if(n)edit.name=n.value;if(d&&d.value)edit.date=d.value}
 function runOcr(file){captureEdit();ocrBusy=true;ocrMsg='Reading the picture. The first time takes a little while.';render();
- prepImage(file).then(function(c){return(window.Tesseract?Promise.resolve():loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js')).then(function(){return Tesseract.recognize(c,'eng',{langPath:'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int'})})})
- .then(function(r){var words=extractWords(r.data.text);ocrBusy=false;
+ prepImage(file).then(function(c){return(window.Tesseract?Promise.resolve():loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js')).then(function(){return Tesseract.createWorker('eng',1,{langPath:'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int'})}).then(function(wk){return wk.setParameters({tessedit_pageseg_mode:'6'}).then(function(){return wk.recognize(c)}).then(function(r){try{wk.terminate()}catch(e){}return r},function(e){try{wk.terminate()}catch(x){}throw e})})})
+ .then(function(r){var words=ocrWords(r.data);ocrBusy=false;
   if(!words.length){ocrMsg='I could not find words in that picture. Try a closer, straighter photo, or type them in.';render();return}
   var base=edit.draft!=null?edit.draft:(edit.isNew?'':wordsText((lessonById(edit.lid)||{words:[]}).words));
   edit.draft=(base.trim()?base.replace(/\s+$/,'')+'\n':'')+words.join('\n');
